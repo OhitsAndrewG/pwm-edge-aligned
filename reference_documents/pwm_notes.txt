@@ -1,0 +1,99 @@
+PWM - pulse with modulation
+ - comes down to one counter and one comparator
+    - CNT : timer counter
+    - ARR : max CNT then goes back to 0
+    - PSC : prescalar
+    - CCR : Capture/compare register the number where the output pin flips, sets the duty cycles
+    - each channel has a compare register CCR. in PWM mode the output pin flips whnt CNT crosses the CCR. (Duty Cyle)
+
+Q1 — the clock. Assume the classic 72 MHz setup from the 8 MHz crystal. The AHB runs at 72 MHz, APB2 at 72 MHz, 
+and APB1 is limited to 36 MHz so it has a ÷2 prescaler. TIM2/3/4 hang off APB1. 
+What clock actually reaches the TIM2 counter? (There's a trap here — read the "timer clock" 
+note in the RCC section of the reference manual, RM0383.)
+
+Definitions:
+
+Clock Sources:
+HSE - High Speed Externals - 25MHz Crystal
+HSI - High Speed Internal - 16MHz oscillator baked into the silicon, free, walways there - slopy
+LSE - Low Speed External - 32.768kHz watch crystal, for the RTC
+LSI - Low Speed Internal - 32kHz internal ocillator, inaccurate (watchdog only)
+RC - Resistor - Capacitor - marks an oscillator built from on chip R and C, no crustial needed
+OSC_IN/OUT - the two physical pins the HSE crystal solder to PH0, PH1 on your board
+OSC32_IN/OUT - two pins for the 32.768 kHz crystal
+I2S_CKIN - i2s clock in, pin feeding extenal audion book
+
+PLL Block:
+PLL - Phase locked loop - circuit that multplies a slow accurate clock into a fast one
+VCO - voltage controlled oscillator - the fast oscillator inside the PLL, feedback steers its voltage until it locks
+/M - divides the input before the PLL, to land in the PLLs required input window
+xN - multplies up to the VCO frequency, The actual speed up
+/P - Divides the CO down to make SYSCLK
+/Q - divides the VCO down to make 48MHz for USB
+/R - divides the VCO for I2S audio
+PLLCLK - PLL Clock - teh /P output, the PLLs contribution to SYSCLK
+PLL48CK - PPL 48MHz Clock - the /Q output
+PLLI2S - A secon, independant PLL dedicated to audio, so changing CPI speed doesnt detune your audio
+PLLI2SCLK/I2SRC - teh audion clock and the Mux choosing where it comes from
+
+Distribution - Muxes and dividers
+SW - Switch - the system clock selector, Picks HSI, HSE, or PLLCLK. this is the final "go fast switch"
+SYSCLK - System Clock - the chips master clock, post selection everything below derives from it
+    PRESC - prescalar - a divider. divides a clock by an integer
+    AHB - advanced high perfomrace bus - the fast internal bus: core , memory, DMA, and GPIO
+    HCLK - (AHB)clock - the AHB bus clock
+    APB - Advanced peripheral bus - the slow peripheral bus, hung off AHB
+    APBx - x is a placeholder for 1 or 2. one drawing covering both busses
+    FCLK - free-running clock - clock to the core that keeps running even when HCLK is gated in sleep - lets core wake up
+    /8 - ficed divider feeding the cortex system timer systick
+    /2 to 31 - divider on the HSE branch to bring 25MHz near 1MHz for teh RTC
+    /1 to 5 - divider on teh MCO outputs, so you can slow a clock down enoght to observe it
+
+Consumers and Control
+MCO1/2 - MCU clock output - pins the emit an internal clock so tou can scope it. your clock debugging tool
+RTC - real time clock - calender/date peripheral 
+RTCSEL[1:0] - RTC Select - 2 bits choosing the RTCs source [1:0] = 2 bit field
+IWDG - independent watch dog - resets teh chip if tour firmware hands. deliberatly hardwired to LSI so a broken clock config cant disable it
+I2S - Inter IC sound - digital audion interface
+
+
+answer: the clock that reached TIM2 is AHB/APB1 @ 50MHz (MAX)
+trail ->  HSE OSC(4-25MHz) --> /M (DIVIDE PLL INPUT) 25 --> xN (VCO) --> /P (divide to amkek PLLCLK) --> SW(SELECT PLLCLK as SYSCLK)
+--> PLLCLK AHB PRESC --> APB11 PRESC --> IF BOX 
+
+
+Q2 — the pin. Open the pinout table for the F103C8 and find which pin gives you TIM3_CH1, and which gives you TIM2_CH2. 
+Then check: can you PWM the onboard LED on PC13? The answer will teach you something important.
+looking at the STM32f411CE document, its states that TIM3_CH1(PA6 - 16) (PB4 - 40) and TIM2_CH2 (PA1 - 11) (PB3 - 39)
+ - you really only have two choice PA1 or PA6
+ - PA1:
+    pin 11
+    AF1
+    Timer Width 32 Bit
+    BUS - APB1 - 96MHz
+    PSC/ARR 95/19999
+    FREE CHANNELS - 3
+- PA6:
+    pin 16 
+    AF2
+    16bit
+    APB1 - 96MHz
+    95/19999
+    Free channels - PA6, 7 . PB0, PB1
+
+Staying with timer 2 will have 3 free pin PA1, PA2, PA3  since they have available channels
+32 bit is not needed, ARR19999 fist in 16 bits
+ 
+
+Q3 — the split. If you want a 1 kHz PWM wave, (PSC+1) × (ARR+1) has to equal timer_clock / 1000. That has many valid factorizations. 
+Which one do you pick, and why does the choice matter? (Hint: think about what ARR buys you that PSC doesn't.)
+
+
+Project Structure:
+src - my .c files
+inc - your .h files
+vendor - code you did not write CMSIS HALS LIBS
+Linker - .ls scripts
+Startup - vector table
+build - generated
+

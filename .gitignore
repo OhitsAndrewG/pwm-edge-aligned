@@ -1,0 +1,11 @@
+build/
+*.o
+*.d
+*.elf
+*.bin
+*.map
+.DS_Store
+
+# Vendor documentation - freely downloadable, 16 MB, never changes.
+# See reference_documents/datasheets/README.md for links.
+reference_documents/datasheets/*.pdf

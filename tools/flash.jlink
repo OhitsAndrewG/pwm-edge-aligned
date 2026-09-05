@@ -1,0 +1,9 @@
+// J-Link Commander script - run by `make flash`
+// Loading the .elf (not the .bin) means J-Link reads the load addresses
+// out of the file itself, so no 0x08000000 to get wrong.
+r                       // reset and halt the target
+h                       // ensure halted
+loadfile build/pwm.elf  // erase + program + verify
+r                       // reset again so we start clean
+g                       // go - let the CPU run
+exit

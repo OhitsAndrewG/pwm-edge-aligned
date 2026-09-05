@@ -1,0 +1,287 @@
+================================================================================
+BARE-METAL ARM PROJECT: THE FILES YOU ALWAYS NEED
+Written for STM32F411CEU6, but the structure applies to ANY bare-metal
+ARM Cortex-M project. Only the specific filenames change.
+================================================================================
+
+
+1. THE SEVEN THINGS EVERY BARE-METAL PROJECT NEEDS
+--------------------------------------------------------------------------------
+There is no operating system. Nothing is set up for you. You are responsible
+for everything from the first instruction after reset. That responsibility
+breaks down into exactly seven pieces:
+
+  #  PIECE                 ANSWERS THE QUESTION
+  -  --------------------  ------------------------------------------------
+  1  Linker script         "Where does code go in memory?"
+  2  Startup file          "What runs first, before main()?"
+  3  System file           "What basic CPU setup happens before main()?"
+  4  Core header           "What CPU am I on?"
+  5  Device header         "What peripherals does this chip have?"
+  6  Build recipe          "How do I turn all this into a .bin?"
+  7  Your code             the actual point
+
+Miss any one and you either fail to compile, fail to link, or get a board
+that does nothing with no error message.
+
+
+2. WHAT EACH ONE ACTUALLY DOES
+--------------------------------------------------------------------------------
+
+LINKER SCRIPT  (*.ld)
+  Nothing else in the toolchain knows where your chip's memory is. The
+  script declares it:
+
+      FLASH  origin 0x08000000   length 512K     <- F411CE
+      RAM    origin 0x20000000   length 128K
+
+  It also places the vector table at the very start of flash and defines
+  the symbols the startup code needs (_sdata, _edata, _sbss, _ebss,
+  _estack).
+
+  KEY INSIGHT: a linker script only cares about MEMORY SIZES, not pinout.
+  An F411VE script works unchanged on an F411CE because both are 512K/128K.
+  The V vs C is package, and the linker never sees pins.
+
+STARTUP FILE  (startup_*.s)
+  On reset the Cortex-M core does exactly two things:
+      reads address 0  -> initial stack pointer
+      reads address 4  -> address of the reset handler, and jumps there
+  Everything after that is this file's job:
+      - copy initialised globals (.data) from flash into RAM
+      - zero the .bss section
+      - call SystemInit()
+      - call main()
+  Skip the .data/.bss work and your global variables contain garbage.
+
+SYSTEM FILE  (system_stm32f4xx.c)
+  Defines SystemInit(), which the startup file calls BY NAME, plus the
+  SystemCoreClock global. If it is missing you get:
+      undefined reference to `SystemInit'
+  ...at LINK time, not compile time.
+
+CORE HEADER  (core_cm4.h)
+  Describes the CPU itself: NVIC, SysTick, MPU, FPU. One header per core
+  family. Cortex-M4 -> core_cm4.h. It drags in cmsis_compiler.h,
+  cmsis_gcc.h, cmsis_version.h and mpu_armv7.h without being asked.
+
+DEVICE HEADER  (stm32f411xe.h + stm32f4xx.h)
+  Describes the chip's peripherals. This is what makes
+      TIM2->CCR2 = 1500;
+  compile into a store to a fixed address. See section 4 for why there
+  are two of them.
+
+BUILD RECIPE  (Makefile / CMakeLists.txt)
+  Ties it together: CPU flags, include paths, the device #define, the
+  linker script, and the objcopy step that produces a flashable .bin.
+
+
+3. THE STANDARD DIRECTORY LAYOUT
+--------------------------------------------------------------------------------
+
+    project/
+    |
+    +-- Makefile                    build recipe
+    +-- README.md
+    +-- openocd.cfg                 flash / debug config
+    |
+    +-- linker/
+    |     STM32F411CEUx_FLASH.ld
+    |
+    +-- startup/
+    |     startup_stm32f411xe.s
+    |
+    +-- vendor/                     CODE YOU DID NOT WRITE
+    |   +-- cmsis/
+    |       +-- LICENSE.txt         <- always keep this
+    |       +-- core/               core_cm4.h + its 4 dependencies
+    |       +-- device/             stm32f4xx.h, stm32f411xe.h,
+    |                               system_stm32f4xx.h
+    +-- inc/                        your headers  (.h)
+    +-- src/                        your sources  (.c)
+    +-- build/                      generated -- gitignored
+
+
+THE FOUR PRINCIPLES THAT GENERATE THIS LAYOUT
+(memorise these, not the tree)
+
+  1. Separate what you WROTE from what you DID NOT.
+     Vendor code gets deleted and re-downloaded wholesale. Yours must
+     never be at risk when that happens. This is the important one.
+
+  2. Separate SOURCE from GENERATED.
+     `rm -rf build` must never lose work. build/ stays out of git.
+
+  3. Separate INTERFACE from IMPLEMENTATION.
+     .h says what may be called, .c says how. One -Iinc flag.
+
+  4. One module = one .c + one .h, named for the thing.
+     pwm.c / pwm.h, uart.c / uart.h. Predictable navigation.
+
+RULE OF THUMB: add a directory when a flat listing stops being scannable,
+not before. Six files in one folder is fine. Sixty is not.
+
+
+4. THE GENERIC-VS-SPECIFIC HEADER PATTERN
+--------------------------------------------------------------------------------
+This pattern appears in every vendor's SDK. Learn it once.
+
+    main.c
+      |
+      +-- #include "stm32f4xx.h"        GENERIC name. xx = wildcard.
+            |                           Contains no registers -- it is a
+            |                           switchboard of #ifdefs.
+            |
+            |   reads -DSTM32F411xE from the Makefile
+            v
+          #include "stm32f411xe.h"      SPECIFIC. 647 KB of real register
+            |                           and bit-mask definitions.
+            v
+          #include "core_cm4.h"         the CPU core
+
+WHY THE INDIRECTION: ST ships one package covering ~40 chips. Your source
+includes the generic name; a single -D picks the specific one. Retargeting
+to an F407 means changing one Makefile flag, not editing every file.
+
+DECODING THE PART NUMBER -- STM32F411CEU6
+
+      F4   series
+      11   line
+      C    48 pins
+      E    512 KB flash
+      U    UFQFPN package
+      6    -40 to +85 C
+
+The device header is named stm32f411xe.h. That 'x' sits exactly where the
+PIN COUNT goes, and it is a wildcard on purpose: pin count does not change
+a single register. F411CE (48 pin), F411RE (64) and F411VE (100) all share
+this one header. Only FLASH SIZE gets its own letter, because that changes
+the memory map.
+
+
+5. VENDOR/ OR SRC/ ? THE TEST
+--------------------------------------------------------------------------------
+system_stm32f4xx.c is written by ST, yet it belongs in src/. The rule:
+
+        "WILL I EVER EDIT THIS FILE?"
+             no  -> vendor/
+             yes -> src/, it is yours now
+
+Look at where ST ships things. Headers live in Include/ -- you consume
+those unchanged, forever. system_stm32f4xx.c lives in Source/TEMPLATES/.
+That word is deliberate: a template is a starting point you are expected
+to own and modify.
+
+The moment you edit a file, it stops being vendor code. You do not want
+that file living in a folder you might delete and re-download.
+
+Secondary reason: vendor/ is on the INCLUDE PATH (-Ivendor/...), handled
+by the preprocessor. A .c must be named in the Makefile's source list and
+compiled to a .o. Different mechanisms -- keep them in different folders.
+
+
+6. MAKEFILE ESSENTIALS
+--------------------------------------------------------------------------------
+The flags that are not optional:
+
+  CPU (Cortex-M4 with FPU):
+      -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard
+
+  DEVICE SELECT -- THE ONE THAT WILL BITE YOU:
+      -DSTM32F411xE
+    Without it, stm32f4xx.h matches no #ifdef branch and you get a wall
+    of "unknown type name" errors that look nothing like the real problem.
+
+  INCLUDE PATHS:
+      -Iinc -Ivendor/cmsis/core -Ivendor/cmsis/device
+
+  LINKER:
+      -T linker/STM32F411CEUx_FLASH.ld
+      -Wl,-Map=build/out.map        (memory usage report -- worth having)
+      --specs=nano.specs --specs=nosys.specs
+
+  DEBUG WHILE LEARNING:
+      -Og -g3
+
+  OUTPUT:
+      arm-none-eabi-objcopy -O binary build/out.elf build/out.bin
+
+  DEPENDENCY TRACKING (see section 7):
+      -MMD -MP
+
+
+7. HOW TO PRUNE A VENDOR PACKAGE SAFELY
+--------------------------------------------------------------------------------
+Vendor downloads are huge because one download serves everyone: every
+core, every compiler, every chip in the family. You need one of each.
+
+DO NOT GUESS WHICH FILES YOU USE. Ask the compiler -- it already tracks it.
+With -MMD -MP, GCC writes a .d file next to every .o listing every header
+that file touched:
+
+    make clean && make
+    cat build/*.d | tr ' ' '\n' | grep -E '^vendor/' | sort -u
+
+That prints the exact list. It will include files you would never have
+guessed -- mpu_armv7.h and cmsis_version.h get pulled in by core_cm4.h
+without you asking. That is precisely why you check instead of guessing.
+
+Delete the rest, rebuild, compare binary sizes. Identical size means the
+deletion was free.
+
+NEVER DELETE: LICENSE files. CMSIS is Apache-2.0 and requires you to
+retain them. A few KB. Not worth the argument.
+
+
+8. CHECKLIST FOR STARTING A NEW BARE-METAL PROJECT
+--------------------------------------------------------------------------------
+  [ ] Identify the exact part number from the CHIP MARKING, not the board
+      nickname. ("Black Pill" is F411 or F401; "Blue Pill" is F103.)
+  [ ] Download the REFERENCE MANUAL (registers) and the DATASHEET
+      (pinout, alternate functions). They are different documents and you
+      need both.
+  [ ] mkdir linker startup vendor inc src build
+  [ ] Copy the linker script      -- check FLASH and RAM sizes match
+  [ ] Copy the startup .s         -- must match your chip AND your toolchain
+                                     (gcc, not EWARM/MDK-ARM)
+  [ ] Copy the core header + its dependencies
+  [ ] Copy the device headers     -- BOTH the generic and the specific one
+  [ ] Copy system_*.c into src/
+  [ ] Write the Makefile          -- do not forget -D<DEVICE>
+  [ ] main.c = int main(void){ while(1); }
+  [ ] make                        -- GET A CLEAN BUILD BEFORE ANY PERIPHERAL CODE
+  [ ] Flash it, confirm the board does not fault
+  [ ] Only now start writing peripheral code
+
+THE MOST IMPORTANT LINE ABOVE is the clean build on an empty main().
+Prove the toolchain works while main.c is trivial. Then when something
+breaks later, you know it is your code and not your build.
+
+
+9. THE THREE-FILTER RULE FOR CHOOSING ANY PIN
+--------------------------------------------------------------------------------
+Every pin decision on any MCU passes these in order. Each layer can only
+REMOVE options, never add them.
+
+  FILTER            QUESTION                        DOCUMENT
+  ----------------  ------------------------------  ---------------------
+  1. SILICON        Can this peripheral reach this   Datasheet, alternate
+                    pin at all?                      function mapping table
+  2. PACKAGE        Is that pin bonded out on MY     Datasheet, pin
+                    package?                         definitions table
+  3. BOARD          Has the board vendor already     Board schematic --
+                    claimed it?                      AND look at the board
+
+Silicon and package constraints cannot be overridden -- if there is no
+bond wire, the pin is not there. Board constraints sometimes can (cut a
+trace, remove a resistor), but rarely worth it.
+
+Filter 3 sometimes requires physically LOOKING at the hardware. Schematics
+show what CAN be populated; only the board in your hand shows what IS.
+
+================================================================================
+
+
+Makefile:
+target: prerequisites
+	recipe
