@@ -29,7 +29,7 @@ JLINK_DEVICE := STM32F411CE
 
 # --- SOURCES -----------------------------------------------------------------
 # Listed explicitly rather than globbed, so adding a file is a deliberate act.
-C_SRCS   := src/main.c src/system_stm32f4xx.c
+C_SRCS   := src/main.c src/pwm.c src/system_stm32f4xx.c
 ASM_SRCS := startup/startup_stm32f411xe.s
 LDSCRIPT := linker/STM32F411CEUx_FLASH.ld
 

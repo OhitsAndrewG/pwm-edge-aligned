@@ -130,10 +130,13 @@ pwm_example/
 ├── vendor/cmsis/               code NOT written here
 │   ├── core/                   core_cm4.h + its 4 dependencies
 │   └── device/                 stm32f4xx.h, stm32f411xe.h, system_stm32f4xx.h
+├── inc/
+│   ├── board.h                 ← the ONLY file that knows this is a Black Pill
+│   └── pwm.h                   the driver's interface
 ├── src/
-│   ├── main.c                  ← the actual PWM configuration
+│   ├── main.c                  application — knows only about servos
+│   ├── pwm.c                   ← all register work, portable to any F411
 │   └── system_stm32f4xx.c      ST template: defines SystemInit()
-├── inc/                        (empty — for the pwm.c/board.h refactor)
 ├── tools/
 │   ├── flash.jlink             J-Link Commander script
 │   └── pwm.gdb                 GDB helper commands
@@ -151,6 +154,54 @@ pwm_example/
 **Why `system_stm32f4xx.c` is in `src/` despite being ST's code:** it ships
 under `Source/Templates/`, meaning it is a starting point you are expected to
 edit. The test is *"will I ever change this file?"* — if yes, it is yours.
+
+---
+
+## Scope — deliberately no clock configuration
+
+This runs on the **HSI**, the internal RC oscillator the chip boots on. No PLL,
+no flash wait states, no voltage scaling. That is a choice, not an omission: it
+keeps the entire example to 11 register writes, so the PWM is not buried under
+40 lines of unrelated clock setup.
+
+The cost is accuracy, and it is measured rather than assumed. HSI is spec'd
+around ±1 %; on this board it ran near 15.76 MHz, making absolute pulse widths
+~1.5 % long. [See the measurements](#measured-results) — including why that
+error is invisible in duty cycle but not in absolute time.
+
+**To fix it:** configure HSE + PLL for 96 MHz, then change one line —
+`PWM_TIM_CLK_HZ` in [`inc/board.h`](inc/board.h). `pwm.c` derives the prescaler
+from it, so `PSC` becomes 95 on its own and nothing else moves.
+
+---
+
+## Using this in your own project
+
+Three files, three kinds of knowledge. The test for where a line belongs is
+*"what would I change if…?"*
+
+| If you… | You edit only |
+|---|---|
+| move the output to another pin | `inc/board.h` |
+| change the servo's behaviour | `src/main.c` |
+| port to a different STM32 family | `src/pwm.c` |
+| switch to HSE + PLL | `inc/board.h` (one number) |
+
+To lift it into an existing project: copy `inc/board.h`, `inc/pwm.h` and
+`src/pwm.c`, edit the five `#define`s in `board.h`, and call:
+
+```c
+pwm_init(1500);      /* configure and start, first pulse 1500 us */
+pwm_set_us(2000);    /* change width — applied at the next frame boundary */
+```
+
+`pwm.c` has no idea what a servo is. It emits a pulse of the width you ask for
+at a fixed frame rate; what that width *means* is your business.
+
+`pwm_init()` takes the initial width as an argument on purpose — the compare
+register must hold a valid value **before** the output is connected to the pin,
+or the first pulse is 0 µs wide, which some servos read as a fault. Making it a
+parameter means a caller cannot get that ordering wrong.
 
 ---
 
@@ -233,13 +284,18 @@ rather than taken on faith.
 
 ## Not done yet
 
-- [ ] **HSE + PLL** — 96 MHz from the 25 MHz crystal, fixing the 1.5 % error
-      (96 MHz needs `PSC = 95`; note 100 MHz and working USB are mutually
-      exclusive with a 25 MHz crystal, since no integer `Q` gives 48 MHz)
-- [ ] **A delay function** — SysTick, so the board can sweep on its own
-- [ ] **Sweep loop** — move `CCR2` between endpoints
-- [ ] **Refactor** into `inc/board.h` (pin choices) + `src/pwm.c` (the driver)
-      + `main.c` (application), so porting touches one file
+- [x] ~~**Refactor** into `board.h` / `pwm.c` / `main.c`~~ — done. Verified
+      byte-equivalent: the macros compile to the same constants as the
+      hand-written version, so the abstraction costs nothing
+- [ ] **Make it move on its own** — sweep between endpoints by counting frames
+      off the timer's own `UIF` flag, which fires once per 20 ms. No SysTick
+      and no calibrated busy-loop needed; the pacing comes free from hardware
+      that is already running
+- [ ] **A photo of the wired-up board** to go with the ASCII diagram
+
+**Out of scope** (see [Scope](#scope--deliberately-no-clock-configuration)):
+HSE + PLL clock setup belongs in its own project, not bolted onto a minimal
+PWM example.
 
 ---
 
