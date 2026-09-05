@@ -1,6 +1,7 @@
 # pwm-edge-aligned
 
-**A bare-metal reference for generating edge-aligned PWM on an STM32.**
+**A worked example of how hardware PWM actually works on an STM32, configured
+register by register.**
 
 Configured as **PWM mode 1, edge-aligned** — the counter only counts up, so
 every pulse begins at the same instant and only the falling edge moves. Used
@@ -23,12 +24,20 @@ what it does and **why it sits where it does in the sequence**.
 
 ## What it does
 
-Sweeps an RC servo back and forth on **PA1** — a 50 Hz signal whose pulse
-width walks from 1000 µs to 2000 µs in 10 µs steps, pausing 500 ms at each end.
-Full cycle ≈ 5 s.
+Produces a 50 Hz signal on **PA1** whose pulse width sweeps from 1000 µs to
+2000 µs in 10 µs steps, pauses 500 ms, and comes back. Full cycle ≈ 5 s.
 
-Flash it and the servo moves. The CPU's only job is one register write per
-frame; the timer regenerates every pulse in hardware.
+**The point is that after configuration, PWM costs the CPU nothing.** The
+counter, comparator and output are all in silicon. The loop writes one register
+per frame — and the pulses would keep coming if it wrote nothing at all. They
+keep coming while the core is halted at a breakpoint, which is the easiest way
+to prove it to yourself.
+
+> **Why these numbers?** 20 ms frame with a 1–2 ms pulse is RC servo timing.
+> It was chosen because it is a real, published, externally verifiable target —
+> you can check the output against a specification instead of against your own
+> arithmetic. A servo is a convenient thing to point this at, not the purpose.
+> Other applications are [the same code with different constants](#retargeting-to-other-pwm-applications).
 
 | Setting | Value | Meaning |
 |---|---|---|
@@ -176,6 +185,38 @@ error is invisible in duty cycle but not in absolute time.
 **To fix it:** configure HSE + PLL for 96 MHz, then change one line —
 `PWM_TIM_CLK_HZ` in [`inc/board.h`](inc/board.h). `pwm.c` derives the prescaler
 from it, so `PSC` becomes 95 on its own and nothing else moves.
+
+---
+
+## Retargeting to other PWM applications
+
+Everything below the timer is the same. Change `PWM_PERIOD_US` in
+[`inc/pwm.h`](inc/pwm.h) and the pulse widths in `main.c`:
+
+| Application | Frequency | `PWM_PERIOD_US` | Pulse widths | Steps available |
+|---|---|---|---|---|
+| **RC servo** (this repo) | 50 Hz | 20000 | 1000–2000 | 1000 |
+| LED dimming | 1 kHz | 1000 | 0–1000 | 1000 |
+| Motor / ESC drive | 20 kHz | 50 | 0–50 | **50** ⚠️ |
+
+⚠️ **That last row is the catch, and it is worth understanding.**
+
+This driver fixes a **1 µs tick** (`PSC` is derived to make one tick equal one
+microsecond, which is what lets `CCR2` read directly as microseconds). At 50 Hz
+that gives 20 000 ticks per frame — resolution to spare. At 20 kHz a frame is
+only 50 ticks, so duty cycle moves in 2 % jumps, which is far too coarse for
+motor control.
+
+The fix is to stop insisting on a 1 µs tick: drop `PSC` and let each tick be
+shorter. At `PSC = 0` on a 16 MHz clock a tick is 62.5 ns, so a 20 kHz frame is
+800 ticks — usable. The cost is that `CCR2` no longer reads as microseconds and
+every constant needs converting.
+
+**That trade — readability against resolution — is the real design decision
+behind `PSC`**, and it is why the prescaler is derived in
+[`src/pwm.c`](src/pwm.c) rather than hardcoded. See
+[`reference_documents/pwm-math.png`](reference_documents/pwm-math.png) for the
+arithmetic.
 
 ---
 
