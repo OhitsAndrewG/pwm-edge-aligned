@@ -201,7 +201,17 @@ configure, then enable the peripheral last.
 ## Measured results
 
 Captured on a PicoScope 2204A at PA1. Values set from GDB with `pos <us>`.
-Screenshots are in `reference_documents/screenshots/`.
+
+![Pulse width at four CCR2 values](reference_documents/pwm-sweep-comparison.png)
+
+Same time scale and same trigger point in all four, so the rising edges line up
+and only the falling edge moves. The period is unchanged.
+
+Full screenshots, including the measurement panels:
+[1000](reference_documents/screenshots/scope-ccr2-1000.png) ·
+[1500](reference_documents/screenshots/scope-ccr2-1500.png) ·
+[2000](reference_documents/screenshots/scope-ccr2-2000.png) ·
+[3000](reference_documents/screenshots/scope-ccr2-3000.png)
 
 | `CCR2` | Nominal | Measured | Duty expected | Duty measured |
 |---|---|---|---|---|
