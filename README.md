@@ -1,401 +1,303 @@
 # pwm-edge-aligned
 
-**A worked example of how hardware PWM actually works on an STM32, configured
-register by register.**
-
-Configured as **PWM mode 1, edge-aligned** — the counter only counts up, so
-every pulse begins at the same instant and only the falling edge moves. Used
-here to produce an **RC servo pulse**: a 20 ms frame with a 1–2 ms high time.
-
-> Strictly, a servo reads the *absolute pulse width*, not the duty ratio — so
-> it is a pulse-width-encoded signal rather than PWM in the dimmer/motor sense.
-> The [measurements below](#the-interesting-result-duty-is-exact-absolute-time-is-not)
-> show why that distinction has real consequences.
-
-Built to be copied. The goal was not to drive a servo — it was to have a
-known-good, fully commented starting point for *any* future project that
-needs PWM, written directly against the hardware registers with no HAL, no
-LL drivers, and no CubeMX-generated code.
-
-Every register write in [`src/main.c`](src/main.c) carries a comment saying
-what it does and **why it sits where it does in the sequence**.
-
----
+Hardware PWM on an STM32F411, configured directly against the registers. No
+HAL, no LL drivers, no CubeMX output.
 
 ## What it does
 
-Produces a 50 Hz signal on **PA1** whose pulse width sweeps from 1000 µs to
-2000 µs in 10 µs steps, pauses 500 ms, and comes back. Full cycle ≈ 5 s.
+Outputs a 50 Hz signal on PA1. The pulse width sweeps from 1000 µs to 2000 µs
+in 10 µs steps, pauses 500 ms, then sweeps back. One cycle takes about 5
+seconds.
 
-**The point is that after configuration, PWM costs the CPU nothing.** The
-counter, comparator and output are all in silicon. The loop writes one register
-per frame — and the pulses would keep coming if it wrote nothing at all. They
-keep coming while the core is halted at a breakpoint, which is the easiest way
-to prove it to yourself.
+After configuration the timer runs without CPU involvement. The counter,
+comparator and output are all in hardware. The loop writes one register per
+frame. The pulses continue if it writes nothing, and continue while the core
+is halted at a breakpoint.
 
-> **Why these numbers?** 20 ms frame with a 1–2 ms pulse is RC servo timing.
-> It was chosen because it is a real, published, externally verifiable target —
-> you can check the output against a specification instead of against your own
-> arithmetic. A servo is a convenient thing to point this at, not the purpose.
-> Other applications are [the same code with different constants](#retargeting-to-other-pwm-applications).
+The timing values (20 ms frame, 1000–2000 µs pulse) are the RC servo
+convention. They are used here because they are published and externally
+verifiable, so the output can be checked against a specification rather than
+against the same arithmetic that produced it.
 
 | Setting | Value | Meaning |
 |---|---|---|
 | Timer / channel | TIM2 CH2 | 32-bit general-purpose timer |
-| Pin | **PA1** (physical pin 11), AF1 | |
-| Timer clock | 16 MHz | HSI, the reset default — no PLL configured |
-| `PSC` | 15 | divides by `PSC+1` = 16 → **1 tick = 1 µs** |
-| `ARR` | 19999 | `ARR+1` = 20 000 ticks → **20 ms → 50 Hz** |
-| `CCR2` | 1500 | **pulse width in microseconds** |
+| Pin | PA1, physical pin 11, AF1 | |
+| Timer clock | 16 MHz | HSI, the reset default. No PLL. |
+| `PSC` | 15 | divides by `PSC+1` = 16, giving a 1 µs tick |
+| `ARR` | 19999 | `ARR+1` = 20000 ticks = 20 ms = 50 Hz |
+| `CCR2` | 1000–2000 | pulse width in microseconds |
 
-Because `PSC` was chosen to make one tick equal exactly one microsecond,
-`CCR2` *is* the pulse width in µs. No conversion arithmetic anywhere.
+`PSC` is chosen so one tick is one microsecond. `CCR2` is therefore the pulse
+width in microseconds directly, with no conversion.
 
-Once configured, the timer runs entirely in hardware. The `while(1)` loop is
-empty and the CPU does nothing — PWM continues even while halted at a GDB
-breakpoint.
+The full derivation is in
+[`reference_documents/pwm-math.png`](reference_documents/pwm-math.png).
 
-See [`reference_documents/pwm-math.png`](reference_documents/pwm-math.png)
-for the full derivation.
+## Hardware
 
----
-
-## Hardware used
-
-| Tool | What it is | Role here |
-|---|---|---|
-| **WeAct Black Pill** — STM32F411CEU6 | Cortex-M4F, 100 MHz max, 512 KB flash, 128 KB RAM, UFQFPN48 package | The target. Note: "Black Pill" is an **F4**; the "Blue Pill" is an F103. Always read the chip marking, not the nickname |
-| **Breadboard + jumpers** | — | Servo signal from PA1, and a separate 5 V rail for the servo |
-| **SEGGER J-Link** | SWD debug probe | Flashing and live register inspection. Needs `VTref`, `SWDIO`→PA13, `SWCLK`→PA14, `GND` |
-| **PicoScope 2204A** (2000 series) | 2-channel USB scope, 10 MHz / 100 MS/s | Verifying the waveform is *actually* what the registers claim. This is the tool that caught the HSI clock error |
-| **Hobby servo** | — | 50 Hz frame, 1–2 ms pulse. Powered from its **own** supply, grounds tied |
+| Item | Notes |
+|---|---|
+| WeAct Black Pill, STM32F411CEU6 | Cortex-M4F, 512 KB flash, 128 KB RAM, UFQFPN48. The Black Pill is an F4. The Blue Pill is an F103. Read the chip marking. |
+| SEGGER J-Link | SWD probe. Used for flashing and register inspection. |
+| PicoScope 2204A | 2 channels, 10 MHz, 100 MS/s. Used to verify the output. |
+| Breadboard, jumpers | |
+| RC servo (optional) | Not required. The signal can be verified on a scope alone. |
 
 ### Wiring
 
 ```
-   J-Link  VTref ──── 3V3        (sense only — does NOT power the board)
+   J-Link  VTref ──── 3V3
            SWDIO ──── PA13
            SWCLK ──── PA14
            GND   ──── GND
 
    Servo   signal ─── PA1  (pin 11)
            +5V    ─── external 5 V supply
-           GND    ─── supply GND  AND  board GND
+           GND    ─── supply GND and board GND
 ```
 
-> **Do not power the servo from the Black Pill.** Even a 9 g servo pulls
-> around an amp when it stalls and will brown out the board.
+VTref senses the target voltage. It does not supply power. Connect the Black
+Pill's USB for power and the J-Link for debug at the same time.
 
----
+Do not power a servo from the Black Pill. A 9 g servo draws around an amp when
+stalled and will brown out the board.
 
 ## Toolchain
 
-Everything is command-line. No IDE.
-
 | | |
 |---|---|
-| Compiler | `arm-none-eabi-gcc` (Arm GNU Toolchain 15.2) |
-| Debugger | `arm-none-eabi-gdb` + `JLinkGDBServer` |
-| Flashing | `JLinkExe` via [`tools/flash.jlink`](tools/flash.jlink) |
-| Headers | CMSIS only — core + device, 8 files, vendored in `vendor/` |
+| Compiler | `arm-none-eabi-gcc`, Arm GNU Toolchain 15.2 |
+| Debugger | `arm-none-eabi-gdb` with `JLinkGDBServer` |
+| Flashing | `JLinkExe`, driven by [`tools/flash.jlink`](tools/flash.jlink) |
+| Headers | CMSIS core and device only, 8 files, vendored under `vendor/` |
 
 ```bash
-make          # build  -> build/pwm.bin
-make flash    # build + write to the chip via J-Link
-make gdbserver # start a GDB server on :2331
+make            # build -> build/pwm.bin
+make flash      # build and write to the chip
+make gdbserver  # GDB server on :2331
 make clean
 ```
 
-Debugging:
+Every flag in the Makefile has a comment explaining what it does.
+
+### Debugging
 
 ```bash
-make gdbserver                                    # terminal 1
+make gdbserver                                              # terminal 1
 arm-none-eabi-gdb build/pwm.elf -ex "target remote :2331"   # terminal 2
 ```
 
-Then in GDB:
+Then:
 
 ```
 source tools/pwm.gdb
 regs        # dump every configured register with expected values
-running     # is the timer actually counting?
-pos 1200    # set pulse width in µs, live
-rf          # rebuild + flash + reset
+running     # check whether the counter is advancing
+pos 1200    # set pulse width in µs
+rf          # rebuild, flash, reset
 ```
 
-`pos` works while the CPU is **halted** — the timer keeps running, so you can
-watch the pulse width change on a scope with the processor stopped. That is
-the clearest demonstration that PWM is hardware, not code.
+`pos` works while the core is halted. The timer keeps running, so the pulse
+width changes on the scope with the processor stopped.
 
----
+The helpers use raw addresses rather than the CMSIS macros. Those macros only
+resolve in files that include `stm32f4xx.h`, which `main.c` does not.
 
 ## Project layout
 
 ```
-pwm_example/
-├── LICENSE                     MIT (your code) — CMSIS is Apache-2.0
-├── Makefile                    every flag commented — see it for what -mthumb,
-│                               --specs=, --gc-sections etc. actually do
+pwm-edge-aligned/
+├── LICENSE                     MIT. CMSIS is Apache-2.0.
+├── Makefile
 ├── linker/
 │   └── STM32F411CEUx_FLASH.ld  512K flash @ 0x08000000, 128K RAM @ 0x20000000
 ├── startup/
 │   └── startup_stm32f411xe.s   vector table, .data/.bss init, calls SystemInit
-├── vendor/cmsis/               code NOT written here
-│   ├── core/                   core_cm4.h + its 4 dependencies
+├── vendor/cmsis/
+│   ├── core/                   core_cm4.h and its four dependencies
 │   └── device/                 stm32f4xx.h, stm32f411xe.h, system_stm32f4xx.h
 ├── inc/
-│   ├── board.h                 ← the ONLY file that knows this is a Black Pill
-│   └── pwm.h                   the driver's interface
+│   ├── board.h                 pin, timer and clock rate
+│   └── pwm.h                   driver interface
 ├── src/
-│   ├── main.c                  application — knows only about servos
-│   ├── pwm.c                   ← all register work, portable to any F411
-│   └── system_stm32f4xx.c      ST template: defines SystemInit()
+│   ├── main.c                  application
+│   ├── pwm.c                   register configuration
+│   └── system_stm32f4xx.c      ST template, defines SystemInit()
 ├── tools/
-│   ├── flash.jlink             J-Link Commander script
-│   └── pwm.gdb                 GDB helper commands
+│   ├── flash.jlink
+│   └── pwm.gdb
 └── reference_documents/
-    ├── pwm-math.png/.svg       full derivation of the timing math
-    ├── BARE-METAL-PROJECT-FILES.txt   what files any bare-metal project needs
-    ├── pwm_notes.txt           working notes
-    ├── datasheets/             NOT committed — see its README for links
+    ├── pwm-math.png/.svg       timing derivation
+    ├── BARE-METAL-PROJECT-FILES.txt
+    ├── pwm_notes.txt
+    ├── datasheets/             not committed, see its README
     └── screenshots/
-        ├── scope-ccr2-{1000,1500,2000,3000}.png   measured waveforms
-        ├── rm0383-fig12-clock-tree.png
-        └── ds-fig3-block-diagram.png
 ```
 
-**Why `system_stm32f4xx.c` is in `src/` despite being ST's code:** it ships
-under `Source/Templates/`, meaning it is a starting point you are expected to
-edit. The test is *"will I ever change this file?"* — if yes, it is yours.
+`system_stm32f4xx.c` is ST's code but sits in `src/` because ST ships it under
+`Source/Templates/`. It is a file you are expected to edit. Headers under
+`vendor/` are consumed unchanged.
 
----
+## Scope
 
-## Scope — deliberately no clock configuration
+This runs on the HSI, the internal RC oscillator the chip boots on. There is no
+PLL and no clock configuration. That keeps the example to 11 register writes.
 
-This runs on the **HSI**, the internal RC oscillator the chip boots on. No PLL,
-no flash wait states, no voltage scaling. That is a choice, not an omission: it
-keeps the entire example to 11 register writes, so the PWM is not buried under
-40 lines of unrelated clock setup.
+The cost is accuracy. HSI is specified at around ±1 %. On this board it ran near
+15.76 MHz, which makes absolute pulse widths about 1.5 % long. The measurements
+below show the effect.
 
-The cost is accuracy, and it is measured rather than assumed. HSI is spec'd
-around ±1 %; on this board it ran near 15.76 MHz, making absolute pulse widths
-~1.5 % long. [See the measurements](#measured-results) — including why that
-error is invisible in duty cycle but not in absolute time.
+To fix it, configure HSE and the PLL for 96 MHz and change `PWM_TIM_CLK_HZ` in
+[`inc/board.h`](inc/board.h). `pwm.c` derives the prescaler from that value, so
+`PSC` becomes 95 automatically and nothing else changes.
 
-**To fix it:** configure HSE + PLL for 96 MHz, then change one line —
-`PWM_TIM_CLK_HZ` in [`inc/board.h`](inc/board.h). `pwm.c` derives the prescaler
-from it, so `PSC` becomes 95 on its own and nothing else moves.
+## Using this in another project
 
----
+Three files, three kinds of knowledge:
 
-## Retargeting to other PWM applications
-
-Everything below the timer is the same. Change `PWM_PERIOD_US` in
-[`inc/pwm.h`](inc/pwm.h) and the pulse widths in `main.c`:
-
-| Application | Frequency | `PWM_PERIOD_US` | Pulse widths | Steps available |
-|---|---|---|---|---|
-| **RC servo** (this repo) | 50 Hz | 20000 | 1000–2000 | 1000 |
-| LED dimming | 1 kHz | 1000 | 0–1000 | 1000 |
-| Motor / ESC drive | 20 kHz | 50 | 0–50 | **50** ⚠️ |
-
-⚠️ **That last row is the catch, and it is worth understanding.**
-
-This driver fixes a **1 µs tick** (`PSC` is derived to make one tick equal one
-microsecond, which is what lets `CCR2` read directly as microseconds). At 50 Hz
-that gives 20 000 ticks per frame — resolution to spare. At 20 kHz a frame is
-only 50 ticks, so duty cycle moves in 2 % jumps, which is far too coarse for
-motor control.
-
-The fix is to stop insisting on a 1 µs tick: drop `PSC` and let each tick be
-shorter. At `PSC = 0` on a 16 MHz clock a tick is 62.5 ns, so a 20 kHz frame is
-800 ticks — usable. The cost is that `CCR2` no longer reads as microseconds and
-every constant needs converting.
-
-**That trade — readability against resolution — is the real design decision
-behind `PSC`**, and it is why the prescaler is derived in
-[`src/pwm.c`](src/pwm.c) rather than hardcoded. See
-[`reference_documents/pwm-math.png`](reference_documents/pwm-math.png) for the
-arithmetic.
-
----
-
-## Using this in your own project
-
-Three files, three kinds of knowledge. The test for where a line belongs is
-*"what would I change if…?"*
-
-| If you… | You edit only |
+| If you change | You edit |
 |---|---|
-| move the output to another pin | `inc/board.h` |
-| change the servo's behaviour | `src/main.c` |
-| port to a different STM32 family | `src/pwm.c` |
-| switch to HSE + PLL | `inc/board.h` (one number) |
+| the output pin | `inc/board.h` |
+| what the program does | `src/main.c` |
+| the STM32 family | `src/pwm.c` |
+| the clock source | `inc/board.h`, one number |
 
-To lift it into an existing project: copy `inc/board.h`, `inc/pwm.h` and
-`src/pwm.c`, edit the five `#define`s in `board.h`, and call:
+Copy `inc/board.h`, `inc/pwm.h` and `src/pwm.c`, edit the defines in `board.h`,
+then:
 
 ```c
-pwm_init(1500);          /* configure and start, first pulse 1500 us */
-pwm_set_us(2000);        /* change width — applied at the next frame boundary */
+pwm_init(1500);          /* configure and start, first pulse 1500 µs */
+pwm_set_us(2000);        /* new width, applied at the next frame boundary */
 pwm_wait_frames(25);     /* block for 25 frames = 500 ms */
 ```
 
-`pwm_wait_frames()` is paced by the timer's own `UIF` flag, which the hardware
-sets once per period. That makes it exact regardless of CPU clock, compiler, or
-optimisation level — unlike a calibrated busy-loop, which breaks the moment you
-change any of the three. Frames are also the natural unit: a servo samples one
-pulse at a time, so updating faster than once per frame achieves nothing.
+`pwm.c` has no knowledge of servos. It emits a pulse of the requested width at
+a fixed frame rate.
 
-`pwm.c` has no idea what a servo is. It emits a pulse of the width you ask for
-at a fixed frame rate; what that width *means* is your business.
+`pwm_init()` takes the initial width as an argument because the compare
+register must hold a valid value before the output is connected to the pin.
+Otherwise the first pulse is 0 µs wide, which some devices treat as a fault.
 
-`pwm_init()` takes the initial width as an argument on purpose — the compare
-register must hold a valid value **before** the output is connected to the pin,
-or the first pulse is 0 µs wide, which some servos read as a fault. Making it a
-parameter means a caller cannot get that ordering wrong.
+`pwm_wait_frames()` blocks on the timer's `UIF` flag, which hardware sets once
+per period. It stays accurate regardless of CPU clock, compiler or optimisation
+level. A calibrated busy-loop does not.
 
----
+## Register order
 
-## The register order (and why it matters)
-
-| # | Register | Hard rule? |
+| # | Register | Fixed position? |
 |---|---|---|
-| 1–2 | `RCC->AHB1ENR`, `RCC->APB1ENR` | **yes** — writes to an unclocked peripheral are silently discarded |
-| 3–4 | `GPIOA->MODER`, `GPIOA->AFR[0]` | convention |
-| 5–7 | `TIM2->PSC`, `ARR`, `CCMR1` | convention |
-| 8 | `TIM2->CCR2` | **yes** — before the output is enabled, or the first pulse is 0 µs |
-| 9 | `TIM2->CCER` | convention |
-| 10 | `TIM2->EGR` (`UG`) | **yes** — loads `PSC`/`ARR` out of their shadow registers |
-| 11 | `TIM2->CR1` (`CEN`) | **yes** — last, so nothing partial reaches the pin |
+| 1–2 | `RCC->AHB1ENR`, `RCC->APB1ENR` | Yes. Writes to an unclocked peripheral are discarded silently. |
+| 3–4 | `GPIOA->MODER`, `GPIOA->AFR[0]` | No |
+| 5–7 | `TIM2->PSC`, `ARR`, `CCMR1` | No |
+| 8 | `TIM2->CCR2` | Yes. Before the output is enabled. |
+| 9 | `TIM2->CCER` | No |
+| 10 | `TIM2->EGR` (`UG`) | Yes. Loads `PSC` and `ARR` from their shadow registers. |
+| 11 | `TIM2->CR1` (`CEN`) | Yes. Last. |
 
-The general pattern, true for every STM32 peripheral:
-
-> **CLOCK ON → CONFIGURE → ENABLE LAST**
-
----
+The same pattern applies to every STM32 peripheral: enable the clock,
+configure, then enable the peripheral last.
 
 ## Measured results
 
-Captured with the PicoScope 2204A on PA1, values set live from GDB with
-`pos <us>`. Full screenshots in `reference_documents/screenshots/`.
+Captured on a PicoScope 2204A at PA1. Values set from GDB with `pos <us>`.
+Screenshots are in `reference_documents/screenshots/`.
 
-| `CCR2` | Nominal | **Measured pulse** | Ratio | Duty expected | **Duty measured** | Capture |
-|---|---|---|---|---|---|---|
-| 1000 | 1.000 ms | **1.024 ms** | 1.0240 | 5.00 % | **5.04 %** | [scope-ccr2-1000.png](reference_documents/screenshots/scope-ccr2-1000.png) |
-| 1500 | 1.500 ms | **1.516 ms** | 1.0107 | 7.50 % | **7.48 %** | [scope-ccr2-1500.png](reference_documents/screenshots/scope-ccr2-1500.png) |
-| 2000 | 2.000 ms | **2.021 ms** | 1.0105 | 10.00 % | **9.97 %** | [scope-ccr2-2000.png](reference_documents/screenshots/scope-ccr2-2000.png) |
-| 3000 | 3.000 ms | **3.045 ms** | 1.0150 | 15.00 % | **15.01 %** | [scope-ccr2-3000.png](reference_documents/screenshots/scope-ccr2-3000.png) |
+| `CCR2` | Nominal | Measured | Duty expected | Duty measured |
+|---|---|---|---|---|
+| 1000 | 1.000 ms | 1.024 ms | 5.00 % | 5.04 % |
+| 1500 | 1.500 ms | 1.516 ms | 7.50 % | 7.48 % |
+| 2000 | 2.000 ms | 2.021 ms | 10.00 % | 9.97 % |
+| 3000 | 3.000 ms | 3.045 ms | 15.00 % | 15.01 % |
 
-Cycle time held at **20.28–20.30 ms** (49.27–49.32 Hz) across all four — the
-period is completely independent of `CCR2`, exactly as PWM requires.
+Cycle time stayed between 20.28 and 20.30 ms (49.27–49.32 Hz) in all four
+cases. The period does not depend on `CCR2`.
 
-The 3000 point is outside the servo's usable range and was captured with the
-scope only. It is there to show the relationship stays **linear** well beyond
-1000–2000: the timer does not know or care what a servo is.
+The 3000 µs point is outside the RC servo range and was captured with the scope
+only. It shows the relationship stays linear past that range.
 
-### The interesting result: duty is exact, absolute time is not
+### Duty cycle is accurate, absolute time is not
 
-Look at the two right-hand columns against the two left-hand ones.
+Absolute pulse widths are consistently 1.0–1.5 % long. Duty cycle matches the
+intended value to within 0.04 %.
 
-- **Absolute pulse width** is consistently ~1.0–1.5 % long
-- **Duty cycle** matches the intended value to within 0.04 %
-
-That is not a coincidence. Duty cycle is a *ratio*:
+Duty cycle is a ratio:
 
 ```
-    duty = t_high / T_period = CCR2 / (ARR + 1)
+duty = t_high / T_period = CCR2 / (ARR + 1)
 ```
 
-Both the pulse and the period are generated by counting the same ticks, so if
-the tick is 1.5 % too long, both stretch by 1.5 % and **the error cancels in
-the ratio**. The counter is doing exactly what it was told; only the wall-clock
-meaning of a "tick" is off.
+The pulse and the period are counted in the same ticks. If a tick is 1.5 % too
+long, both stretch by 1.5 % and the error cancels.
 
-**Which is why this matters for a servo specifically.** A servo does not
-measure duty cycle — it measures the *absolute* high time and compares it
-against an internal reference. So it sees the full 1.5 % error, roughly 4° of
-position. An LED dimmer or a motor driver, which only cares about the ratio,
-would not be affected at all by this clock error.
+This matters for devices that read absolute pulse width, such as RC servos. It
+does not matter for LED dimming or motor drive, where only the ratio is used.
 
-### Root cause: the HSI
+### Cause
 
-The systematic offset traces back to the clock source. The internal RC
-oscillator is spec'd around ±1 % and was running near **15.76 MHz** instead of
-16.00 MHz, making each "1 µs" tick actually ~1.015 µs.
+The systematic offset comes from the clock source. The HSI ran near 15.76 MHz
+instead of 16.00 MHz, so each 1 µs tick was about 1.015 µs.
 
 ```
-    20.28 ms measured / 20.00 ms expected = 1.014
+20.28 ms measured / 20.00 ms expected = 1.014
 ```
 
-The arithmetic was never wrong. **Only the clock source carried error.**
-Switching to the 25 MHz crystal and PLL (±20 ppm) removes it entirely.
+The arithmetic is correct. Only the clock source carries error. HSE with the
+PLL is specified at ±20 ppm and would remove it.
 
-That is the whole argument for an external crystal — measured on a bench
-rather than taken on faith.
+## Not done
 
-## Not done yet
-
-- [x] ~~**Refactor** into `board.h` / `pwm.c` / `main.c`~~ — done. Verified
-      byte-equivalent: the macros compile to the same constants as the
-      hand-written version, so the abstraction costs nothing
-- [x] ~~**Make it move on its own**~~ — done. Sweeps by counting frames off the
-      timer's own `UIF` flag. No SysTick, no calibrated busy-loop; the pacing
-      comes free from hardware that was already running
-- [ ] **Drive the sweep from the timer interrupt** instead of blocking in
+- [ ] Drive the sweep from the timer interrupt instead of blocking in
       `pwm_wait_frames()`, so the CPU is free for other work
-- [ ] **A photo of the wired-up board** to go with the ASCII diagram
+- [ ] Photograph the wired-up board
 
-**Out of scope** (see [Scope](#scope--deliberately-no-clock-configuration)):
-HSE + PLL clock setup belongs in its own project, not bolted onto a minimal
-PWM example.
-
----
+HSE and PLL configuration is out of scope. See [Scope](#scope).
 
 ## Resources
 
-### Documents — you need all three, they answer different questions
+Three documents, each answering a different question.
 
 | Document | Answers |
 |---|---|
-| [RM0383 — Reference Manual](https://www.st.com/resource/en/reference_manual/rm0383-stm32f411xce-advanced-armbased-32bit-mcus-stmicroelectronics.pdf) | *"What bits do I write?"* — RCC, GPIO, TIM chapters. Local copy in `reference_documents/datasheets/` |
-| [STM32F411xC/E Datasheet](https://www.st.com/resource/en/datasheet/stm32f411ce.pdf) | *"Which pin can do this?"* — the alternate-function mapping table and the per-package pin list |
-| [WeAct Black Pill schematic](https://github.com/WeActStudio/WeActStudio.MiniSTM32F4x1) | *"Is that pin already used?"* — the one people forget |
+| [RM0383 Reference Manual](https://www.st.com/resource/en/reference_manual/rm0383-stm32f411xce-advanced-armbased-32bit-mcus-stmicroelectronics.pdf) | What bits to write. RCC, GPIO and TIM chapters. |
+| [STM32F411xC/E Datasheet](https://www.st.com/resource/en/datasheet/stm32f411ce.pdf) | Which pin can carry a given function, and which pins exist on this package. |
+| [WeAct Black Pill schematic](https://github.com/WeActStudio/WeActStudio.MiniSTM32F4x1) | Whether the board already uses that pin. |
 
-**The three-filter rule for choosing any pin:**
+Choosing a pin means passing three filters in order. Each one removes options.
 
-1. **Silicon** — can this peripheral reach this pin at all? *(datasheet, AF table)*
-2. **Package** — is that pin bonded out on UFQFPN48? *(datasheet, pin definitions)*
-3. **Board** — has WeAct already claimed it? *(schematic, and look at the board)*
+1. Silicon: can the peripheral reach this pin. Datasheet, alternate function
+   mapping table.
+2. Package: is that pin bonded out on UFQFPN48. Datasheet, pin definitions
+   table.
+3. Board: has the board vendor already used it. Schematic, and inspect the
+   board.
 
-Each layer only removes options. `PA0` is `TIM2_CH1` and passes filters 1 and
-2 — but it is wired to the user button, so it fails filter 3. `PB11` is a real
-`TIM2_CH4` but is not bonded out on the 48-pin package, so it fails filter 2.
+PA0 is TIM2_CH1 and passes filters 1 and 2, but WeAct wired it to the user
+button, so it fails filter 3. PB11 is TIM2_CH4 but is not bonded out on the
+48-pin package, so it fails filter 2.
 
-### Source of the vendored headers
+### Vendored headers
 
-- [STMicroelectronics/cmsis_device_f4](https://github.com/STMicroelectronics/cmsis_device_f4) — device headers and startup files
-- [ARM-software/CMSIS_5](https://github.com/ARM-software/CMSIS_5) — `core_cm4.h` and friends
+- [STMicroelectronics/cmsis_device_f4](https://github.com/STMicroelectronics/cmsis_device_f4)
+- [ARM-software/CMSIS_5](https://github.com/ARM-software/CMSIS_5)
 
-Both also ship inside the STM32CubeF4 package under `Drivers/CMSIS/`.
+Both are also included in the STM32CubeF4 package under `Drivers/CMSIS/`.
 
 ### Tools
 
 - [Arm GNU Toolchain](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads)
 - [SEGGER J-Link software](https://www.segger.com/downloads/jlink/)
 - [PicoScope software](https://www.picotech.com/downloads)
-- [STM32CubeMX](https://www.st.com/en/development-tools/stm32cubemx.html) — worth
-  installing *just* for its interactive clock-tree view, even if you never
-  generate a line of code with it
-
----
+- [STM32CubeMX](https://www.st.com/en/development-tools/stm32cubemx.html), useful
+  for its interactive clock tree view even if you generate no code with it
 
 ## Licence
 
-This project's own code is **MIT** — see [`LICENSE`](LICENSE).
+MIT for this project's code. See [`LICENSE`](LICENSE).
 
-Vendored CMSIS headers under `vendor/cmsis/` are **Apache-2.0** (ARM and
-STMicroelectronics) — see [`vendor/cmsis/LICENSE.txt`](vendor/cmsis/LICENSE.txt).
+CMSIS headers under `vendor/cmsis/` are Apache-2.0. See
+[`vendor/cmsis/LICENSE.txt`](vendor/cmsis/LICENSE.txt).
 
-The ST reference manual and datasheet are **not redistributed here**. Download
-links are in [`reference_documents/datasheets/README.md`](reference_documents/datasheets/README.md).
+ST's reference manual and datasheet are not redistributed here. Download links
+are in
+[`reference_documents/datasheets/README.md`](reference_documents/datasheets/README.md).
