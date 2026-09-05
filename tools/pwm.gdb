@@ -1,55 +1,63 @@
-# GDB helpers for pwm_example
+# GDB helpers for pwm-edge-aligned
 #   load with:   source tools/pwm.gdb
 #
+# Uses RAW ADDRESSES rather than the CMSIS macros (RCC, GPIOA, TIM2), because
+# those are preprocessor macros and only resolve when you are stopped inside a
+# file that included stm32f4xx.h. Addresses work from anywhere - including
+# main.c, which no longer includes it after the driver was split out.
+#
+#   RCC   base 0x40023800    AHB1ENR +0x30   APB1ENR +0x40
+#   GPIOA base 0x40020000    MODER   +0x00   AFR[0]  +0x20   AFR[1] +0x24
+#   TIM2  base 0x40000000    CR1 +0x00  EGR +0x14  CCMR1 +0x18  CCER +0x20
+#                            CNT +0x24  PSC +0x28  ARR   +0x2c  CCR2  +0x38
 # --------------------------------------------------------------------------
 
-# pos <microseconds>   set the servo pulse width
 define pos
-  set var TIM2->CCR2 = $arg0
-  printf "CCR2 = %d us\n", TIM2->CCR2
+  set *(unsigned int *)0x40000038 = $arg0
+  printf "CCR2 = %u us\n", *(unsigned int *)0x40000038
 end
 document pos
-Set servo pulse width in microseconds.  Usage: pos 1500
-Safe range is roughly 1000-2000. Stop if the servo buzzes or strains.
+Set the PWM pulse width in microseconds.  Usage: pos 1500
+Safe servo range is roughly 1000-2000; outside that most servos drive against
+a mechanical stop, stall and overheat.
 end
 
-# regs   dump every register this project configures
 define regs
   printf "--- clocks ---\n"
-  printf "  RCC->AHB1ENR  0x%08x   (bit0 GPIOAEN)\n", RCC->AHB1ENR
-  printf "  RCC->APB1ENR  0x%08x   (bit0 TIM2EN)\n",  RCC->APB1ENR
+  printf "  RCC_AHB1ENR  0x%08x   bit0 GPIOAEN should be 1\n", *(unsigned int *)0x40023830
+  printf "  RCC_APB1ENR  0x%08x   bit0 TIM2EN  should be 1\n", *(unsigned int *)0x40023840
   printf "--- pin PA1 ---\n"
-  printf "  GPIOA->MODER  0x%08x   (expect 0xa8000008)\n", GPIOA->MODER
-  printf "  GPIOA->AFR[0] 0x%08x   (expect 0x00000010)\n", GPIOA->AFR[0]
-  printf "--- timer ---\n"
-  printf "  TIM2->PSC     %d\n",                TIM2->PSC
-  printf "  TIM2->ARR     %d       (expect 19999)\n", TIM2->ARR
-  printf "  TIM2->CCMR1   0x%08x   (expect 0x6800)\n", TIM2->CCMR1
-  printf "  TIM2->CCER    0x%08x   (bit4 CC2E)\n",     TIM2->CCER
-  printf "  TIM2->CR1     0x%08x   (bit0 CEN)\n",      TIM2->CR1
-  printf "  TIM2->CCR2    %d us\n",             TIM2->CCR2
-  printf "  TIM2->CNT     %d\n",                TIM2->CNT
+  printf "  GPIOA_MODER  0x%08x   expect 0xa8000008\n", *(unsigned int *)0x40020000
+  printf "  GPIOA_AFRL   0x%08x   expect 0x00000010\n", *(unsigned int *)0x40020020
+  printf "  GPIOA_AFRH   0x%08x   expect 0x00000000\n", *(unsigned int *)0x40020024
+  printf "--- timer TIM2 ---\n"
+  printf "  PSC          %-10u  expect 15   (1 us tick at 16 MHz)\n", *(unsigned int *)0x40000028
+  printf "  ARR          %-10u  expect 19999 (20 ms)\n", *(unsigned int *)0x4000002c
+  printf "  CCMR1        0x%08x   expect 0x6800 (OC2M=PWM1, OC2PE)\n", *(unsigned int *)0x40000018
+  printf "  CCER         0x%08x   bit4 CC2E should be 1\n", *(unsigned int *)0x40000020
+  printf "  CR1          0x%08x   bit0 CEN  should be 1\n", *(unsigned int *)0x40000000
+  printf "  CCR2         %-10u  us pulse width\n", *(unsigned int *)0x40000038
+  printf "  CNT          %-10u\n", *(unsigned int *)0x40000024
 end
 document regs
-Dump every register pwm_example configures, with expected values.
+Dump every register this project configures, with expected values.
+Works from any stack frame - uses raw addresses, not CMSIS macros.
 end
 
-# running   read CNT twice - different numbers mean the timer is alive
 define running
-  set $a = TIM2->CNT
-  set $b = TIM2->CNT
-  printf "CNT: %d then %d  ->  ", $a, $b
+  set $a = *(unsigned int *)0x40000024
+  set $b = *(unsigned int *)0x40000024
+  printf "CNT: %u then %u  ->  ", $a, $b
   if $a != $b
     printf "TIMER IS RUNNING\n"
   else
-    printf "STOPPED (check CEN in CR1)\n"
+    printf "STOPPED - check CEN (CR1 bit 0) and that APB1ENR bit 0 is set\n"
   end
 end
 document running
-Read TIM2->CNT twice and report whether the timer is counting.
+Read TIM2->CNT twice and report whether the counter is advancing.
 end
 
-# rf   rebuild, reflash, reset
 define rf
   make
   load
