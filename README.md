@@ -1,6 +1,15 @@
-# pwm_example
+# pwm-edge-aligned
 
-**A bare-metal reference for generating a single PWM signal on an STM32.**
+**A bare-metal reference for generating edge-aligned PWM on an STM32.**
+
+Configured as **PWM mode 1, edge-aligned** — the counter only counts up, so
+every pulse begins at the same instant and only the falling edge moves. Used
+here to produce an **RC servo pulse**: a 20 ms frame with a 1–2 ms high time.
+
+> Strictly, a servo reads the *absolute pulse width*, not the duty ratio — so
+> it is a pulse-width-encoded signal rather than PWM in the dimmer/motor sense.
+> The [measurements below](#the-interesting-result-duty-is-exact-absolute-time-is-not)
+> show why that distinction has real consequences.
 
 Built to be copied. The goal was not to drive a servo — it was to have a
 known-good, fully commented starting point for *any* future project that
