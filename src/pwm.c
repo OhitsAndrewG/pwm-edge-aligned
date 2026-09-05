@@ -55,6 +55,9 @@
 /* --- TIMx_CCER ------------------------------------------------------------ */
 #define CC2E                (1u << 4)          /* connect channel 2 to the pin */
 
+/* --- TIMx_SR -------------------------------------------------------------- */
+#define UIF                 (1u << 0)          /* update interrupt flag        */
+
 /* --- TIMx_EGR / TIMx_CR1 -------------------------------------------------- */
 #define UG                  (1u << 0)          /* force an update event        */
 #define CEN                 (1u << 0)          /* counter enable               */
@@ -134,6 +137,11 @@ void pwm_init(uint16_t initial_us)
      * occurred, so force one by hand. */
     PWM_TIM->EGR |= UG;
 
+    /* Generating that update event ALSO set UIF - an update by hand is still
+     * an update. Clear it now, so the first pwm_wait_frames() call waits a
+     * real frame instead of returning immediately on a stale flag. */
+    PWM_TIM->SR = ~UIF;
+
     /* [11] CEN - GO. Last, so nothing partial ever appears on the pin. */
     PWM_TIM->CR1 |= CEN;
 }
@@ -154,4 +162,24 @@ void pwm_set_us(uint16_t us)
 uint16_t pwm_get_us(void)
 {
     return (uint16_t)PWM_TIM->CCR2;
+}
+
+
+void pwm_wait_frames(uint16_t frames)
+{
+    while (frames--) {
+        /* UIF is sticky: hardware sets it on every counter wrap and leaves it
+         * set until software clears it. So wait for it, then clear it. */
+        while ((PWM_TIM->SR & UIF) == 0u) {
+            /* spin - one PWM period, 20 ms */
+        }
+
+        /* Timer status flags are rc_w0: writing 0 clears a bit, writing 1 does
+         * nothing. So '= ~UIF' stores 0 to UIF and 1s everywhere else,
+         * clearing exactly one flag in a single write.
+         *
+         * Deliberately NOT '&= ~UIF' - that is a read-modify-write, and a flag
+         * the hardware sets between the read and the write would be lost. */
+        PWM_TIM->SR = ~UIF;
+    }
 }

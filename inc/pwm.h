@@ -40,4 +40,17 @@ void pwm_set_us(uint16_t us);
 /* Current pulse width in microseconds. */
 uint16_t pwm_get_us(void);
 
+/*
+ * Block until 'frames' PWM periods have elapsed. One frame = PWM_PERIOD_US.
+ *
+ * Paced by the timer's own update flag, so it stays exact regardless of CPU
+ * clock, compiler or optimisation level - unlike a calibrated busy-loop.
+ * Frames are also the natural unit here: a servo samples one pulse at a time,
+ * so updating faster than once per frame achieves nothing.
+ *
+ * This BLOCKS. Fine for a simple sweep; a real application would drive the
+ * update from the timer's interrupt instead and leave the CPU free.
+ */
+void pwm_wait_frames(uint16_t frames);
+
 #endif /* PWM_H */

@@ -23,8 +23,12 @@ what it does and **why it sits where it does in the sequence**.
 
 ## What it does
 
-Generates a 50 Hz PWM signal on **PA1** with a pulse width of 1500 µs —
-standard hobby-servo centre position.
+Sweeps an RC servo back and forth on **PA1** — a 50 Hz signal whose pulse
+width walks from 1000 µs to 2000 µs in 10 µs steps, pausing 500 ms at each end.
+Full cycle ≈ 5 s.
+
+Flash it and the servo moves. The CPU's only job is one register write per
+frame; the timer regenerates every pulse in hardware.
 
 | Setting | Value | Meaning |
 |---|---|---|
@@ -191,9 +195,16 @@ To lift it into an existing project: copy `inc/board.h`, `inc/pwm.h` and
 `src/pwm.c`, edit the five `#define`s in `board.h`, and call:
 
 ```c
-pwm_init(1500);      /* configure and start, first pulse 1500 us */
-pwm_set_us(2000);    /* change width — applied at the next frame boundary */
+pwm_init(1500);          /* configure and start, first pulse 1500 us */
+pwm_set_us(2000);        /* change width — applied at the next frame boundary */
+pwm_wait_frames(25);     /* block for 25 frames = 500 ms */
 ```
+
+`pwm_wait_frames()` is paced by the timer's own `UIF` flag, which the hardware
+sets once per period. That makes it exact regardless of CPU clock, compiler, or
+optimisation level — unlike a calibrated busy-loop, which breaks the moment you
+change any of the three. Frames are also the natural unit: a servo samples one
+pulse at a time, so updating faster than once per frame achieves nothing.
 
 `pwm.c` has no idea what a servo is. It emits a pulse of the width you ask for
 at a fixed frame rate; what that width *means* is your business.
@@ -287,10 +298,11 @@ rather than taken on faith.
 - [x] ~~**Refactor** into `board.h` / `pwm.c` / `main.c`~~ — done. Verified
       byte-equivalent: the macros compile to the same constants as the
       hand-written version, so the abstraction costs nothing
-- [ ] **Make it move on its own** — sweep between endpoints by counting frames
-      off the timer's own `UIF` flag, which fires once per 20 ms. No SysTick
-      and no calibrated busy-loop needed; the pacing comes free from hardware
-      that is already running
+- [x] ~~**Make it move on its own**~~ — done. Sweeps by counting frames off the
+      timer's own `UIF` flag. No SysTick, no calibrated busy-loop; the pacing
+      comes free from hardware that was already running
+- [ ] **Drive the sweep from the timer interrupt** instead of blocking in
+      `pwm_wait_frames()`, so the CPU is free for other work
 - [ ] **A photo of the wired-up board** to go with the ASCII diagram
 
 **Out of scope** (see [Scope](#scope--deliberately-no-clock-configuration)):
